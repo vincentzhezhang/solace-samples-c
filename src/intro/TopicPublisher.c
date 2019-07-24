@@ -20,9 +20,14 @@
  *  basic example for demonstration purposes.
  */
 
+#include <time.h>
+
 #include "os.h"
 #include "solclient/solClient.h"
 #include "solclient/solClientMsg.h"
+
+#include "heartbeat_builder.h"
+#include "arg_parser.h"
 
 /*****************************************************************************
  * sessionMessageReceiveCallback
@@ -71,10 +76,38 @@ main ( int argc, char *argv[] )
     solClient_destination_t destination;
     const char *text_p = "Hello world!";
 
-    if ( argc < 6 ) {
-        printf ( "Usage: TopicPublisher <msg_backbone_ip:port> <vpn> <client-username> <password> <topic>\n" );
-        return -1;
-    }
+    /* Arguments */
+    char* solace_host;
+    char* solace_vpn;
+    char* solace_user;
+    char* solace_pwd;
+    char* hb_host;
+    char* hb_service_type;
+    char* hb_instance;
+    char* hb_version;
+    char hb_status;
+    char* hb_comments;
+    uint64_t hb_start_time;
+
+    get_args(argc, argv,
+        &solace_host,
+        &solace_vpn,
+        &solace_user,
+        &solace_pwd,
+        &hb_host,
+        &hb_service_type,
+        &hb_instance,
+        &hb_version,
+        &hb_status,
+        &hb_comments,
+        &hb_start_time);
+
+    char topic[1000] = "v2/";
+
+    strcat(topic, hb_service_type);
+    strcat(topic, "/mgmt/");
+    strcat(topic, hb_instance);
+    strcat(topic, "/heartbeat");
 
     /*************************************************************************
      * Initialize the API (and setup logging level)
@@ -113,16 +146,16 @@ main ( int argc, char *argv[] )
     propIndex = 0;
 
     sessionProps[propIndex++] = SOLCLIENT_SESSION_PROP_HOST;
-    sessionProps[propIndex++] = argv[1];
+    sessionProps[propIndex++] = solace_host;
 
     sessionProps[propIndex++] = SOLCLIENT_SESSION_PROP_VPN_NAME;
-    sessionProps[propIndex++] = argv[2];
+    sessionProps[propIndex++] = solace_vpn;
 
     sessionProps[propIndex++] = SOLCLIENT_SESSION_PROP_USERNAME;
-    sessionProps[propIndex++] = argv[3];
+    sessionProps[propIndex++] = solace_user;
 
     sessionProps[propIndex++] = SOLCLIENT_SESSION_PROP_PASSWORD;
-    sessionProps[propIndex++] = argv[4];
+    sessionProps[propIndex++] = solace_pwd;
 
     /* Create the Session. */
     solClient_session_create ( ( char ** ) sessionProps,
@@ -145,14 +178,42 @@ main ( int argc, char *argv[] )
 
     /* Set the destination. */
     destination.destType = SOLCLIENT_TOPIC_DESTINATION;
-    destination.dest = argv[5];
+    destination.dest = topic;
     solClient_msg_setDestination ( msg_p, &destination, sizeof ( destination ) );
 
+    /* Set the user data. */
+    const char *protocol_version = "3.1.66";
+
+    char* user_data_ptr = NULL;
+    size_t user_data_len = 0;
+    uint64_t crc = 0x20E04842;
+
+    userdata_msg_builder(&user_data_ptr, &user_data_len, crc, protocol_version);
+
+    solClient_msg_setUserData ( msg_p, user_data_ptr, ( solClient_uint32_t ) user_data_len );
+
     /* Add some content to the message. */
-    solClient_msg_setBinaryAttachment ( msg_p, text_p, ( solClient_uint32_t ) strlen ( (char *)text_p ) );
+    uint64_t hb_update_time = time(NULL) * 1e9;
+
+    char* hb_msg_ptr = NULL;
+    size_t hb_msg_len = 0;
+
+    heartbeat_msg_builider(
+        &hb_msg_ptr,
+        &hb_msg_len,
+        hb_host,
+        hb_service_type,
+        hb_instance,
+        hb_version,
+        hb_status,
+        hb_comments,
+        hb_start_time,
+        hb_update_time);
+
+    solClient_msg_setBinaryAttachment ( msg_p, hb_msg_ptr, ( solClient_uint32_t ) hb_msg_len );
 
     /* Send the message. */
-    printf ( "About to send message '%s' to topic '%s'...\n", (char *)text_p, argv[5] );
+    // printf ( "About to send message '%s' to topic '%s'...\n", (char *)text_p, topic );
     solClient_session_sendMsg ( session_p, msg_p );
 
     /* Free the message. */
@@ -165,6 +226,9 @@ main ( int argc, char *argv[] )
 
     /* Cleanup solClient. */
     solClient_cleanup (  );
+
+    free(user_data_ptr);
+    free(hb_msg_ptr);
 
     return 0;
 }
